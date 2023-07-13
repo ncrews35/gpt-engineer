@@ -1,147 +1,64 @@
-import os
-import subprocess
-import logging
-import docx2txt
-import PyPDF2
+File Name: memory.py
+
+```python
 import pandas as pd
-from .utils import *
+import numpy as np
+from openai.embeddings_utils import get_embedding, cosine_similarity
+from .extract import Extractor, File
+from .utils import announce
 
-__all__ = ["File", "Extractor"]
+__all__ = ["Memory"]
 
+session_memory_path = "./tmp/session.csv"
 
-class File():
-
-    def __init__(self, path: str, name: str, content: str):
+class Work:
+    def __init__(self, path: str, diff: str):
         self.path = path
-        self.name = name
-        self.content = content
+        self.diff = diff
 
     def concat(self):
-        return f"Path: {self.path}\n Name: {self.name}\n Content: {self.content}"
+        return f"Path: {self.path}\n Diff: {self.diff}"
 
-    def write(self, content: str):
-        with open(self.path, "w") as f:
-            f.write(content)
+class Memory:
+    def __init__(self, extractor: Extractor):
+        self.extractor = extractor
+        self.completed_work = []
+        self.embed()
 
-    def diff(self):
-        return subprocess.check_output(["git", "diff", self.path]).decode("utf-8")
+    def embed(self):
+        announce("Embedding files...")
+        embeddings = [self._embedding(file) for file in self.extractor.extract()]
+        df = pd.DataFrame(embeddings, columns=["path", "name", "embedding"])
+        df.set_index("path", inplace=True)
+        df.to_csv(session_memory_path)
+        announce("Done embedding files.")
 
+    def add_work(self, file: File):
+        work = Work(file.path, file.diff())
+        self.completed_work.append(work)
+        df = pd.read_csv(session_memory_path)
+        embedding = self._embedding(file)
+        df.at[file.path, "embedding"] = embedding["embedding"]
+        df.to_csv(session_memory_path)
 
+    def context(self, file: File):
+        relevant_files = self._relevant_files(file)
+        relevant_files_concat = "\n".join([file.concat() for file in relevant_files])
+        relevant_files_message = {"role": "system", "content": f"Relevant files:\n{relevant_files_concat}"}
+        completed_work_concat = "\n".join([work.concat() for work in self.completed_work])
+        completed_work_message = {"role": "system", "content": f"Completed work:\n{completed_work_concat}"}
+        return [relevant_files_message, completed_work_message]
 
-class Extractor():
+    def _embedding(self, file: File):
+        embedding = get_embedding(file.content, engine="text-embedding-ada-002", max_tokens=8000)
+        return {"path": file.path, "name": file.name, "embedding": embedding}
 
-    def __init__(self, path: str, exclude_list: list = []):
-        self.base_path = path
-        self.exclude_list = exclude_list
-
-    def extract(self, operation):
-        if self.is_directory():
-            return self.get_directory_content(path=self.base_path, operation=operation)
-        else:
-            return self.extract_from_file(path=self.base_path, operation=operation)
-
-    def file_name(self, path) -> str:
-        return os.path.basename(path)
-
-    def is_directory(self) -> bool:
-        return os.path.isdir(self.base_path)
-
-    def get_directory_content(self, path: str, operation):
-        for filename in os.listdir(path):
-            file_path = os.path.join(path, filename)
-            if os.path.isfile(file_path):
-                self.extract_from_file(file_path, operation=operation)
-
-    def extract_from_file(self, path: str, operation):
-        if any([path.startswith(exclude_item) for exclude_item in self.exclude_list]):
-            return
-
-        content = ""
-        if self.is_docx_file(path):
-            content = self.read_docx_file(path)
-        elif self.is_xlsx_file(path):
-            content = self.read_xlsx_file(path)
-        elif self.is_xls_file(path):
-            content = self.read_xls_file(path)
-        elif self.is_csv_file(path):
-            content = self.read_csv_file(path)
-        elif self.is_pdf_file(path):
-            content = self.read_pdf_file(path)
-        else:
-            content = self.read_file(path)
-
-        operation(
-            File(path=path, name=self.file_name(path), content=str(self.strip(content)))
-        )
-
-    def read_file(self, path) -> str:
-        try:
-            with open(path, "r") as f:
-                return f.read(10000)
-        except FileNotFoundError:
-            logging.error(f"File not found: {path}")
-            return None
-        except Exception as e:
-            logging.error(f"Error reading file: {path}, {e}")
-            return None
-
-    def is_docx_file(self, path) -> bool:
-        return path.endswith(".docx")
-
-    def read_docx_file(self, path: str) -> str:
-        try:
-            return docx2txt.process(path)
-        except Exception as e:
-            logging.error(f"Error reading docx file: {path}, {e}")
-            return None
-
-    def is_xlsx_file(self, path) -> bool:
-        return path.endswith(".xlsx")
-
-    def read_xlsx_file(self, path: str) -> str:
-        try:
-            return pd.read_excel(path).to_string()
-        except Exception as e:
-            logging.error(f"Error reading xlsx file: {path}, {e}")
-            return None
-
-    def is_xls_file(self, path) -> bool:
-        return path.endswith(".xls")
-
-    def read_xls_file(self, path: str) -> str:
-        try:
-            return pd.read_excel(path).to_string()
-        except Exception as e:
-            logging.error(f"Error reading xls file: {path}, {e}")
-            return None
-
-    def is_csv_file(self, path) -> bool:
-        return path.endswith(".csv")
-
-    def read_csv_file(self, path: str) -> str:
-        try:
-            return pd.read_csv(path).to_string()
-        except Exception as e:
-            logging.error(f"Error reading csv file: {path}, {e}")
-            return None
-
-    def is_pdf_file(self, path) -> bool:
-        return path.endswith(".pdf")
-
-    def read_pdf_file(self, path: str) -> str:
-        try:
-            pdfReader = PyPDF2.PdfReader(path)
-            content = ""
-            for i in range(len(pdfReader.pages)):
-                pageObj = pdfReader.pages[i]
-                content += pageObj.extract_text()
-
-            return content
-        except Exception as e:
-            logging.error(f"Error reading pdf file: {path}, {e}")
-            return None
-
-    def strip(self, content: str) -> str:
-        if content is None:
-            return None
-        return content
+    def _relevant_files(self, file: File):
+        embedding = self._embedding(file)["embedding"]
+        df = pd.read_csv(session_memory_path)
+        df["embedding"] = df.embedding.apply(eval).apply(np.array)
+        df["similarity"] = df.embedding.apply(lambda x: cosine_similarity(x, embedding))
+        paths = df.sort_values(by="similarity", ascending=False).head(3).path.tolist()
+        files = [Extractor(path).extract() for path in paths if isinstance(path, str)]
+        return files
+```

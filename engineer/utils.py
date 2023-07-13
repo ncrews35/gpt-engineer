@@ -1,118 +1,78 @@
-import sys
-import json
-import tiktoken
-from PyInquirer import prompt
+File Name: app.py
 
-__all__ = [
-    "announce",
-    "stream",
-    "prompt_confirm",
-    "prompt_string",
-    "prompt_list",
-    "llm_response",
-    "llm_json",
-    "num_tokens",
-    "is_token_overflow",
-]
+```python
+import subprocess
+from .utils import prompt_string, prompt_confirm
+from .repo import RepoConfig
+from .engineer import Engineer, Workspace
+
+temp_path = "./tmp/repo"
 
 
-def announce(message, prefix: str = ""):
-    # Function to print a colored message
-    cyan = '\033[96m'
-    default = '\033[0m'
-    print("{0}{1}{2}{3}".format(prefix, cyan, message, default))
+def main():
+    repo = prompt_string("Repository URL:")
+    base_branch = prompt_string("Base Branch:", default="mainline")
+    dev_branch = prompt_string("Development Branch:", default="gpt-eng")
+    path = prompt_string("Path to directory/file:", default="/")
+    goal = prompt_string("Goal:")
+
+    print("GETTING READY")
+
+    subprocess.run(
+        f"rm -r -f {temp_path}",
+        shell=True,
+        stdout=subprocess.PIPE
+    )
+    subprocess.run(
+        script([
+            f"git clone {repo} " + temp_path,
+            f"cd {temp_path}",
+            f"git fetch",
+            f"git checkout {base_branch}",
+            f"git pull origin {base_branch}",
+            f"git checkout -b {dev_branch}",
+            f"touch ./tmp/session.csv"
+        ]),
+        shell=True,
+        stdout=subprocess.PIPE
+    )
+
+    print("GETTING TO WORK")
+
+    repo = RepoConfig(temp_path)
+    workspace = Workspace(
+        path=temp_path + path,
+        goal=goal,
+        repo_name=repo.name,
+        repo_description=repo.description,
+        exclude_list=repo.exclude_list
+    )
+    engineer = Engineer(workspace)
+    engineer.execute()
+
+    print("FINISHED WORK")
+
+    subprocess.run(
+        script([
+            f"cd {temp_path}",
+            f"git add .",
+            "git commit -m '[GPT] Generated Suggestions\n## Goal\n{0}\n\n#### Path: {1}'".format(
+                goal, path),
+            f"git push origin {dev_branch}"
+        ]),
+        shell=True,
+        stdout=subprocess.PIPE
+    )
+
+    print("SUCCESS! Generation complete.")
 
 
-def stream(message, prefix: str = ""):
-    # Function to print a colored message
-    cyan = '\033[96m'
-    default = '\033[0m'
-    print("{0}{1}{2}{3}".format(prefix, cyan, message, default), end="")
-    sys.stdout.flush()
+def script(cmds: list[str]):
+    return " && ".join(cmds)
+```
 
+File Name: engineer.py
 
-def prompt_confirm(question_message, default=True):
-    # Function to prompt a confirmation question
-
-    return prompt(
-        {
-            'type': 'confirm',
-            'name': 'name',
-            'message': question_message,
-            'default': default
-        }
-    ).get('name')
-
-
-def prompt_string(question_message, default=None):
-    # Function to prompt a string input question
-
-    return prompt(
-        {
-            'type': 'input',
-            'name': 'name',
-            'message': question_message,
-            'default': default if default else ""
-        }
-    ).get('name')
-
-
-def prompt_list(question_message, choices, default=None):
-    # Function to prompt a list selection question
-    return prompt(
-        {
-            'type': 'list',
-            'name': 'name',
-            'message': question_message,
-            'choices': choices,
-            'default': default
-        }
-    ).get('name')
-
-
-def llm_response(obj: any) -> str:
-    """
-    Extracts the top result from the LLM output
-    """
-
-    try:
-        # Get the content of the first choice in the LLM output
-        return obj["choices"][0]["message"]["content"]
-    except KeyError:
-        # Return None if the required keys are not found
-        return None
-
-
-def llm_json(obj: any):
-    """
-    Extracts the top result from the LLM output
-    and converts it to JSON
-    """
-
-    try:
-        # Get the content of the first choice in the LLM output
-        result = obj["choices"][0]["message"]["content"]
-        # Convert the content to JSON and return it
-        return json.loads(result)
-    except (KeyError, json.JSONDecodeError):
-        # Return None if the required keys are not found or if the content is not valid JSON
-        return None
-
-encoding_4 = tiktoken.encoding_for_model("gpt-4")
-encoding_3_5 = tiktoken.encoding_for_model("gpt-3.5-turbo")
-
-def num_tokens(content: str, model="gpt-4"):
-    if model == "gpt-3.5-turbo":
-        encoding = encoding_3_5
-    else:
-        encoding = encoding_4
-
-    return len(encoding.encode(content))
-
-
-def is_token_overflow(content: str, model="gpt-4"):
-    if model == "gpt-3.5-turbo":
-        max_tokens = 3900
-    else:
-        max_tokens = 8000
-    return num_tokens(content, model=model) > max_tokens
+```python
+File Name: memory.py
+```
